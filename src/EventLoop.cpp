@@ -170,6 +170,30 @@ void EventLoop::unregisterFd(int fd) {
     freeSlot(slot_id);
 }
 
+void EventLoop::modifyFdEvents(int fd, uint32_t events) {
+    if (fd < 0 || static_cast<size_t>(fd) >= fd_to_slot_.size()) {
+        throw std::out_of_range("fd is outside preallocated fd_to_slot_ table");
+    }
+
+    const uint32_t slot_id = fd_to_slot_[fd];
+    if (slot_id == kInvalidSlot || slot_id >= slots_.size()) {
+        throw std::runtime_error("fd is not registered");
+    }
+
+    Slot& slot = slots_[slot_id];
+    if (slot.fd != fd || slot.ptr == nullptr) {
+        throw std::runtime_error("fd registration is inconsistent");
+    }
+
+    struct epoll_event ev {};
+    ev.events = events;
+    ev.data.u64 = makeToken(slot_id, slot.generation);
+
+    if (epoll_ctl(epoll_fd_, EPOLL_CTL_MOD, fd, &ev) < 0) {
+        throw std::runtime_error(std::string("epoll_ctl MOD: ") + std::strerror(errno));
+    }
+}
+
 // -----------------------------------------------------------------------------
 // run(): main epoll loop with token validation
 // -----------------------------------------------------------------------------

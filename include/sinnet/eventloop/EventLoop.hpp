@@ -57,6 +57,9 @@ public:
     // Unregister fd: epoll_ctl(DEL), close(fd), invalidate slot, push to free list.
     void unregisterFd(int fd);
 
+    // Modify epoll event mask for an already registered fd.
+    void modifyFdEvents(int fd, uint32_t events);
+
     // Main loop: epoll_wait -> dispatch by token -> validate slot.ptr && slot.generation.
     void run();
 

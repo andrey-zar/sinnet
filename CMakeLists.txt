@@ -6,7 +6,7 @@ if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR "This project currently supports Linux only.")
 endif()
 
-set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -15,6 +15,9 @@ option(SINNET_FETCH_GTEST "Fetch GoogleTest when not found via find_package" ON)
 
 add_library(sinnet
     src/EventLoop.cpp
+    src/connection/Connection.cpp
+    src/connection/TCPConnection.cpp
+    src/connection/UDPConnection.cpp
 )
 add_library(sinnet::sinnet ALIAS sinnet)
 
@@ -24,7 +27,7 @@ target_include_directories(sinnet
         $<INSTALL_INTERFACE:include>
 )
 
-target_compile_features(sinnet PUBLIC cxx_std_17)
+target_compile_features(sinnet PUBLIC cxx_std_23)
 
 add_executable(sinnet_example
     examples/main.cpp
@@ -47,6 +50,7 @@ if(BUILD_TESTING)
 
     add_executable(sinnet_tests
         tests/EventLoopTests.cpp
+        tests/ConnectionTests.cpp
     )
     target_link_libraries(sinnet_tests
         PRIVATE
