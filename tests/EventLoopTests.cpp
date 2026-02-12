@@ -35,13 +35,6 @@ private:
     std::function<void(uint32_t)> callback_;
 };
 
-class StopLoopException : public std::exception {
-public:
-    const char* what() const noexcept override {
-        return "stop event loop";
-    }
-};
-
 TEST(EventLoopTests, RegisterFdRejectsNullHandler) {
     sinnet::EventLoop loop;
 
@@ -144,7 +137,7 @@ TEST(EventLoopTests, RunDispatchesReadableEvent) {
             seen_mask = event_mask;
         }
         cv.notify_one();
-        throw StopLoopException();
+        loop.stop();
     });
 
     ASSERT_NO_THROW(loop.registerFd(fds[0], &handler, EPOLLIN));
@@ -153,8 +146,6 @@ TEST(EventLoopTests, RunDispatchesReadableEvent) {
     std::thread runner([&]() {
         try {
             loop.run();
-        } catch (const StopLoopException&) {
-            // Expected control-flow exception to stop the infinite loop in tests.
         } catch (...) {
             thread_error = std::current_exception();
         }
@@ -194,7 +185,7 @@ TEST(EventLoopTests, RunWithDefaultEventsDispatchesReadableEvent) {
             seen_mask = event_mask;
         }
         cv.notify_one();
-        throw StopLoopException();
+        loop.stop();
     });
 
     ASSERT_NO_THROW(loop.registerFd(fds[0], &handler, 0));
@@ -203,8 +194,6 @@ TEST(EventLoopTests, RunWithDefaultEventsDispatchesReadableEvent) {
     std::thread runner([&]() {
         try {
             loop.run();
-        } catch (const StopLoopException&) {
-            // Expected control-flow exception to stop the infinite loop in tests.
         } catch (...) {
             thread_error = std::current_exception();
         }

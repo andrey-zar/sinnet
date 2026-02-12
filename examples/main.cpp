@@ -13,15 +13,10 @@
 
 namespace {
 
-class StopLoopException : public std::exception {
-public:
-    const char* what() const noexcept override {
-        return "stop event loop";
-    }
-};
-
 class HttpHeadHandler : public sinnet::connection::ConnectionHandler {
 public:
+    explicit HttpHeadHandler(sinnet::EventLoop& event_loop) : event_loop_(event_loop) {}
+
     void onData(sinnet::connection::Connection& connection, std::span<const std::byte> data) override {
         response_.append(reinterpret_cast<const char*>(data.data()), data.size());
         printStatusLineIfReady(connection);
@@ -36,8 +31,9 @@ private:
 
         std::cout << "HTTP status: " << response_.substr(0, line_end) << '\n';
         connection.close();
-        throw StopLoopException();
+        event_loop_.stop();
     }
+    sinnet::EventLoop& event_loop_;
     std::string response_;
 };
 
@@ -46,7 +42,7 @@ private:
 int main() {
     try {
         sinnet::EventLoop event_loop;
-        HttpHeadHandler handler;
+        HttpHeadHandler handler(event_loop);
         sinnet::connection::TCPConnection connection(event_loop, handler);
         connection.connect("example.com", "80");
         static constexpr std::string_view kRequest =
@@ -56,8 +52,6 @@ int main() {
             "\r\n";
         connection.send(std::as_bytes(std::span(kRequest.data(), kRequest.size())), 0);
         event_loop.run();
-    } catch (const StopLoopException&) {
-        return 0;
     } catch (const std::exception& ex) {
         std::cerr << "Example failed: " << ex.what() << '\n';
         return 1;

@@ -89,21 +89,16 @@ std::string portToString(uint16_t port) {
     return std::to_string(static_cast<unsigned>(port));
 }
 
-class StopLoopException : public std::exception {
-public:
-    const char* what() const noexcept override {
-        return "stop event loop";
-    }
-};
-
 class StopOnDataHandler : public sinnet::connection::ConnectionHandler {
 public:
-    explicit StopOnDataHandler(std::string* storage,
+    explicit StopOnDataHandler(sinnet::EventLoop* loop,
+                               std::string* storage,
                                std::mutex* mutex,
                                std::condition_variable* cv,
                                bool* ready,
                                std::string expected_payload)
-        : storage_(storage),
+        : loop_(loop),
+          storage_(storage),
           mutex_(mutex),
           cv_(cv),
           ready_(ready),
@@ -117,11 +112,12 @@ public:
         }
         cv_->notify_one();
         if (*ready_) {
-            throw StopLoopException();
+            loop_->stop();
         }
     }
 
 private:
+    sinnet::EventLoop* loop_ = nullptr;
     std::string* storage_ = nullptr;
     std::mutex* mutex_ = nullptr;
     std::condition_variable* cv_ = nullptr;
@@ -131,12 +127,14 @@ private:
 
 class StopOnByteCountHandler : public sinnet::connection::ConnectionHandler {
 public:
-    explicit StopOnByteCountHandler(std::string* storage,
+    explicit StopOnByteCountHandler(sinnet::EventLoop* loop,
+                                    std::string* storage,
                                     std::mutex* mutex,
                                     std::condition_variable* cv,
                                     bool* ready,
                                     size_t expected_bytes)
-        : storage_(storage),
+        : loop_(loop),
+          storage_(storage),
           mutex_(mutex),
           cv_(cv),
           ready_(ready),
@@ -150,11 +148,12 @@ public:
         }
         cv_->notify_one();
         if (*ready_) {
-            throw StopLoopException();
+            loop_->stop();
         }
     }
 
 private:
+    sinnet::EventLoop* loop_ = nullptr;
     std::string* storage_ = nullptr;
     std::mutex* mutex_ = nullptr;
     std::condition_variable* cv_ = nullptr;
@@ -168,7 +167,7 @@ TEST(ConnectionTests, TcpConnectionCanSendAndReceive) {
     std::mutex mutex;
     std::condition_variable cv;
     bool ready = false;
-    StopOnDataHandler handler(&received_payload, &mutex, &cv, &ready, "pong");
+    StopOnDataHandler handler(&loop, &received_payload, &mutex, &cv, &ready, "pong");
 
     uint16_t port = 0;
     const int server_fd = createTcpServerSocket(&port);
@@ -199,8 +198,6 @@ TEST(ConnectionTests, TcpConnectionCanSendAndReceive) {
     std::thread loop_thread([&]() {
         try {
             loop.run();
-        } catch (const StopLoopException&) {
-            // Expected control-flow exception in this test.
         } catch (...) {
             loop_error = std::current_exception();
         }
@@ -225,7 +222,7 @@ TEST(ConnectionTests, UdpConnectionCanSendAndReceive) {
     std::mutex mutex;
     std::condition_variable cv;
     bool ready = false;
-    StopOnDataHandler handler(&received_payload, &mutex, &cv, &ready, "pong");
+    StopOnDataHandler handler(&loop, &received_payload, &mutex, &cv, &ready, "pong");
 
     uint16_t port = 0;
     const int server_fd = createUdpServerSocket(&port);
@@ -266,8 +263,6 @@ TEST(ConnectionTests, UdpConnectionCanSendAndReceive) {
     std::thread loop_thread([&]() {
         try {
             loop.run();
-        } catch (const StopLoopException&) {
-            // Expected control-flow exception in this test.
         } catch (...) {
             loop_error = std::current_exception();
         }
@@ -292,7 +287,7 @@ TEST(ConnectionTests, ConnectionInvokesHandlerOnData) {
     std::mutex mutex;
     std::condition_variable cv;
     bool ready = false;
-    StopOnDataHandler handler(&received_data, &mutex, &cv, &ready, "data");
+    StopOnDataHandler handler(&loop, &received_data, &mutex, &cv, &ready, "data");
 
     uint16_t port = 0;
     const int server_fd = createTcpServerSocket(&port);
@@ -315,8 +310,6 @@ TEST(ConnectionTests, ConnectionInvokesHandlerOnData) {
     std::thread loop_thread([&]() {
         try {
             loop.run();
-        } catch (const StopLoopException&) {
-            // Expected control-flow exception in this test.
         } catch (...) {
             loop_error = std::current_exception();
         }
@@ -345,7 +338,7 @@ TEST(ConnectionTests, UdpConnectionBatchesMultipleSmallMessages) {
     static constexpr size_t kMessageCount = 128;
     static constexpr std::string_view kPayload = "ok";
     const size_t expected_bytes = kMessageCount * kPayload.size();
-    StopOnByteCountHandler handler(&received_data, &mutex, &cv, &ready, expected_bytes);
+    StopOnByteCountHandler handler(&loop, &received_data, &mutex, &cv, &ready, expected_bytes);
 
     uint16_t port = 0;
     const int server_fd = createUdpServerSocket(&port);
@@ -393,8 +386,6 @@ TEST(ConnectionTests, UdpConnectionBatchesMultipleSmallMessages) {
     std::thread loop_thread([&]() {
         try {
             loop.run();
-        } catch (const StopLoopException&) {
-            // Expected control-flow exception in this test.
         } catch (...) {
             loop_error = std::current_exception();
         }

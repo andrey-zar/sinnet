@@ -14,11 +14,12 @@
 // gen => slot was reused.
 //
 // LOW-LATENCY: single-threaded, no allocs in run() (preallocate/reserve),
-// contiguous slots, stack-allocated epoll_event buffer. Deferred cleanup optional.
+// contiguous slots, stack-allocated epoll_event buffer, and eventfd wakeup for
+// immediate stop() without timeout polling.
 //
 // PSEUDOCODE:
 //   RegisterFD(fd, handler):
-//     slot_id = free_head ? pop_free() : grow_slots()
+//     slot_id = pop_free()
 //     slot.ptr=handler, slot.fd=fd
 //     token = (slot.generation << 32) | slot_id
 //     epoll_ctl(ADD, fd, {events, data.u64=token})
@@ -34,17 +35,23 @@
 //     for e in events:
 //       slot_id, gen = decode(e.data.u64)
 //       if slot.ptr && slot.generation==gen: slot.ptr->onEvent(e.events)
+//
+//   stop():
+//     running = false
+//     write(eventfd, 1) // wake epoll_wait
 
 #pragma once
 
+#include "sinnet/eventloop/EventLoopHandler.hpp"
+
+#include <atomic>
 #include <cstdint>
+#include <memory>
 #include <vector>
 
 struct epoll_event;
 
 namespace sinnet {
-
-class EventLoopHandler;
 
 class EventLoop {
 public:
@@ -63,10 +70,22 @@ public:
     // Main loop: epoll_wait -> dispatch by token -> validate slot.ptr && slot.generation.
     void run();
 
+    // Request loop shutdown and wake epoll_wait immediately.
+    void stop() noexcept;
+
     // Optional: pin thread to isolated CPU core (call before run()). Linux-only.
     void pinToCpu(int cpu_id);
 
 private:
+    class WakeupHandler : public EventLoopHandler {
+    public:
+        explicit WakeupHandler(int wakeup_fd);
+        void onEvent(uint32_t event_mask) override;
+
+    private:
+        int wakeup_fd_ = -1;
+    };
+
     static constexpr uint32_t kInvalidSlot = UINT32_MAX;
 
     struct Slot {
@@ -83,9 +102,12 @@ private:
     void freeSlot(uint32_t slot_id);
 
     int epoll_fd_ = -1;
+    int wakeup_fd_ = -1;
+    std::unique_ptr<WakeupHandler> wakeup_handler_;
     std::vector<Slot> slots_;
     uint32_t free_head_ = kInvalidSlot;
     std::vector<uint32_t> fd_to_slot_;  // fd -> slot_id, fixed direct index table
+    std::atomic<bool> running_{false};
 };
 
 }  // namespace sinnet

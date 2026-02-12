@@ -21,6 +21,9 @@ The project currently provides:
 - low-latency socket tuning at socket setup
   - `SO_SNDBUF` / `SO_RCVBUF` set to 512 KB
   - `TCP_NODELAY` for TCP
+- explicit loop lifecycle
+  - `run()` blocks in `epoll_wait`
+  - `stop()` wakes the loop immediately via internal `eventfd`
 
 ## Build
 
@@ -52,9 +55,16 @@ Create a handler derived from `sinnet::connection::ConnectionHandler`:
 ```cpp
 class MyHandler : public sinnet::connection::ConnectionHandler {
 public:
+    explicit MyHandler(sinnet::EventLoop& loop) : loop_(loop) {}
+
     void onData(sinnet::connection::Connection&, std::span<const std::byte> data) override {
         // Process incoming raw payload bytes.
+        // When your stop condition is met:
+        loop_.stop();
     }
+
+private:
+    sinnet::EventLoop& loop_;
 };
 ```
 
@@ -62,7 +72,7 @@ public:
 
 ```cpp
 sinnet::EventLoop loop;
-MyHandler handler;
+MyHandler handler(loop);
 sinnet::connection::TCPConnection connection(loop, handler);
 connection.connect("127.0.0.1", "8080");
 ```
@@ -70,7 +80,7 @@ connection.connect("127.0.0.1", "8080");
 ### 3) Queue data and run loop
 
 ```cpp
-connection.send(std::as_bytes(std::span(payload)));
+connection.send(std::as_bytes(std::span(payload)), 0);
 loop.run();
 ```
 

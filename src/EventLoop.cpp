@@ -5,6 +5,7 @@
 #include <cstring>
 #include <pthread.h>
 #include <sched.h>
+#include <sys/eventfd.h>
 #include <sys/epoll.h>
 #include <sys/resource.h>
 #include <unistd.h>
@@ -20,6 +21,7 @@ constexpr uint32_t kDefaultEpollEvents = EPOLLIN | EPOLLOUT;
 constexpr int kEpollMaxEvents = 64;
 constexpr uint32_t kDefaultInitialSlotsCapacity = 1024;
 constexpr uint32_t kFdTableHardCap = 8192;
+constexpr uint32_t kWakeupFdEvents = EPOLLIN | EPOLLERR | EPOLLHUP;
 
 uint32_t computeFdTableMax() {
     struct rlimit rl {};
@@ -35,6 +37,20 @@ uint32_t computeFdTableMax() {
     const uint64_t bounded =
         std::min<uint64_t>(static_cast<uint64_t>(limit), static_cast<uint64_t>(kFdTableHardCap));
     return static_cast<uint32_t>(bounded);
+}
+
+void drainEventFd(int fd) noexcept {
+    uint64_t counter = 0;
+    for (;;) {
+        const ssize_t bytes = ::read(fd, &counter, sizeof(counter));
+        if (bytes == static_cast<ssize_t>(sizeof(counter))) {
+            continue;
+        }
+        if (bytes < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+            return;
+        }
+        return;
+    }
 }
 
 }  // namespace
@@ -89,6 +105,14 @@ EventLoop::EventLoop() {
         slots_[i].next_free = (i + 1 < kDefaultInitialSlotsCapacity) ? (i + 1) : kInvalidSlot;
     }
     free_head_ = kDefaultInitialSlotsCapacity > 0 ? 0 : kInvalidSlot;
+
+    wakeup_fd_ = eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC);
+    if (wakeup_fd_ < 0) {
+        throw std::runtime_error(std::string("eventfd: ") + std::strerror(errno));
+    }
+
+    wakeup_handler_ = std::make_unique<WakeupHandler>(wakeup_fd_);
+    registerFd(wakeup_fd_, wakeup_handler_.get(), kWakeupFdEvents);
 }
 
 EventLoop::~EventLoop() {
@@ -195,13 +219,14 @@ void EventLoop::modifyFdEvents(int fd, uint32_t events) {
 }
 
 // -----------------------------------------------------------------------------
-// run(): main epoll loop with token validation
+// run(): main epoll loop with token validation and stop() wakeup
 // -----------------------------------------------------------------------------
 
 void EventLoop::run() {
     struct epoll_event events[kEpollMaxEvents];
+    running_.store(true, std::memory_order_release);
 
-    for (;;) {
+    while (running_.load(std::memory_order_acquire)) {
         const int n = epoll_wait(epoll_fd_, events, kEpollMaxEvents, -1);
         if (n < 0) {
             if (errno == EINTR) {
@@ -224,10 +249,27 @@ void EventLoop::run() {
                 EventLoopHandler* const handler = slot.ptr;
                 if (handler != nullptr) {
                     handler->onEvent(events[i].events);
+                    if (!running_.load(std::memory_order_acquire)) {
+                        break;
+                    }
                 }
             }
             // else: stale event (slot reused or deregistered), ignore
         }
+    }
+}
+
+void EventLoop::stop() noexcept {
+    running_.store(false, std::memory_order_release);
+    if (wakeup_fd_ < 0) {
+        return;
+    }
+
+    const uint64_t signal = 1;
+    const ssize_t written = ::write(wakeup_fd_, &signal, sizeof(signal));
+    if (written < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
+        drainEventFd(wakeup_fd_);
+        (void)::write(wakeup_fd_, &signal, sizeof(signal));
     }
 }
 
@@ -246,6 +288,12 @@ void EventLoop::pinToCpu(int cpu_id) {
 #else
     (void)cpu_id;
 #endif
+}
+
+EventLoop::WakeupHandler::WakeupHandler(int wakeup_fd) : wakeup_fd_(wakeup_fd) {}
+
+void EventLoop::WakeupHandler::onEvent(uint32_t) {
+    drainEventFd(wakeup_fd_);
 }
 
 }  // namespace sinnet
