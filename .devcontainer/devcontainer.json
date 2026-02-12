@@ -1,0 +1,17 @@
+{
+  "name": "sinnet-dev",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-vscode.cpptools",
+        "ms-vscode.cmake-tools"
+      ]
+    }
+  },
+  "postCreateCommand": "cmake -S . -B build -G Ninja",
+  "remoteUser": "vscode"
+}
