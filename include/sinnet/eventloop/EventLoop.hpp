@@ -55,11 +55,31 @@ namespace sinnet {
 
 class EventLoop {
 public:
+    class Registration {
+    public:
+        Registration() = default;
+        Registration(const Registration&) = delete;
+        Registration& operator=(const Registration&) = delete;
+        Registration(Registration&& other) noexcept;
+        Registration& operator=(Registration&& other) noexcept;
+        ~Registration();
+
+        void reset() noexcept;
+        int fd() const noexcept;
+        explicit operator bool() const noexcept;
+
+    private:
+        friend class EventLoop;
+        Registration(EventLoop* loop, int fd) noexcept;
+
+        EventLoop* loop_ = nullptr;
+        int fd_ = -1;
+    };
+
     EventLoop();
     ~EventLoop();
 
-    // Register fd with handler. Uses epoll_event.data.u64 = (generation << 32) | slot_id.
-    void registerFd(int fd, EventLoopHandler* handler, uint32_t events = 0x001 | 0x004);
+    Registration registerFdScoped(int fd, EventLoopHandler* handler, uint32_t events = 0x001 | 0x004);
 
     // Unregister fd: epoll_ctl(DEL), close(fd), invalidate slot, push to free list.
     void unregisterFd(int fd);
@@ -100,6 +120,8 @@ private:
 
     uint32_t allocSlot();
     void freeSlot(uint32_t slot_id);
+    // Internal registration primitive used by scoped registration.
+    void registerFd(int fd, EventLoopHandler* handler, uint32_t events = 0x001 | 0x004);
 
     int epoll_fd_ = -1;
     int wakeup_fd_ = -1;
@@ -108,6 +130,10 @@ private:
     uint32_t free_head_ = kInvalidSlot;
     std::vector<uint32_t> fd_to_slot_;  // fd -> slot_id, fixed direct index table
     std::atomic<bool> running_{false};
+    bool in_dispatch_ = false;
+    std::vector<int> deferred_close_fds_;
+
+    void flushDeferredCloseFds() noexcept;
 };
 
 }  // namespace sinnet

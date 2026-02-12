@@ -5,7 +5,7 @@ network I/O using `epoll`.
 
 The project currently provides:
 
-- `EventLoop` for fd registration, event dispatch, and token-based stale-event protection
+- `EventLoop` for scoped fd registration, event dispatch, and token-based stale-event protection
 - connection layer with `Connection` base class
 - `TCPConnection` and `UDPConnection` implementations
 - handler interfaces (`EventLoopHandler`, `ConnectionHandler`) for callback-driven logic
@@ -24,6 +24,9 @@ The project currently provides:
 - explicit loop lifecycle
   - `run()` blocks in `epoll_wait`
   - `stop()` wakes the loop immediately via internal `eventfd`
+- scoped fd registration and deferred close
+  - public registration is `registerFdScoped(...)` (RAII token)
+  - fd close requested during dispatch is deferred until batch end
 
 ## Build
 

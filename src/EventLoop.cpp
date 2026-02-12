@@ -113,9 +113,11 @@ EventLoop::EventLoop() {
 
     wakeup_handler_ = std::make_unique<WakeupHandler>(wakeup_fd_);
     registerFd(wakeup_fd_, wakeup_handler_.get(), kWakeupFdEvents);
+    deferred_close_fds_.reserve(64);
 }
 
 EventLoop::~EventLoop() {
+    flushDeferredCloseFds();
     if (epoll_fd_ >= 0) {
         for (size_t fd = 0; fd < fd_to_slot_.size(); ++fd) {
             if (fd_to_slot_[fd] == kInvalidSlot) {
@@ -188,10 +190,14 @@ void EventLoop::unregisterFd(int fd) {
     }
 
     epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, fd, nullptr);
-    close(fd);
 
     fd_to_slot_[fd] = kInvalidSlot;
     freeSlot(slot_id);
+    if (in_dispatch_) {
+        deferred_close_fds_.push_back(fd);
+        return;
+    }
+    close(fd);
 }
 
 void EventLoop::modifyFdEvents(int fd, uint32_t events) {
@@ -235,6 +241,7 @@ void EventLoop::run() {
             throw std::runtime_error(std::string("epoll_wait: ") + std::strerror(errno));
         }
 
+        in_dispatch_ = true;
         for (int i = 0; i < n; ++i) {
             const uint64_t token = events[i].data.u64;
             const uint32_t slot_id = static_cast<uint32_t>(token);
@@ -256,7 +263,11 @@ void EventLoop::run() {
             }
             // else: stale event (slot reused or deregistered), ignore
         }
+        in_dispatch_ = false;
+        flushDeferredCloseFds();
     }
+    in_dispatch_ = false;
+    flushDeferredCloseFds();
 }
 
 void EventLoop::stop() noexcept {
@@ -294,6 +305,61 @@ EventLoop::WakeupHandler::WakeupHandler(int wakeup_fd) : wakeup_fd_(wakeup_fd) {
 
 void EventLoop::WakeupHandler::onEvent(uint32_t) noexcept {
     drainEventFd(wakeup_fd_);
+}
+
+EventLoop::Registration::Registration(EventLoop* loop, int fd) noexcept : loop_(loop), fd_(fd) {}
+
+EventLoop::Registration::Registration(Registration&& other) noexcept
+    : loop_(other.loop_), fd_(other.fd_) {
+    other.loop_ = nullptr;
+    other.fd_ = -1;
+}
+
+EventLoop::Registration& EventLoop::Registration::operator=(Registration&& other) noexcept {
+    if (this == &other) {
+        return *this;
+    }
+    reset();
+    loop_ = other.loop_;
+    fd_ = other.fd_;
+    other.loop_ = nullptr;
+    other.fd_ = -1;
+    return *this;
+}
+
+EventLoop::Registration::~Registration() {
+    reset();
+}
+
+void EventLoop::Registration::reset() noexcept {
+    if (loop_ == nullptr || fd_ < 0) {
+        return;
+    }
+    loop_->unregisterFd(fd_);
+    loop_ = nullptr;
+    fd_ = -1;
+}
+
+int EventLoop::Registration::fd() const noexcept {
+    return fd_;
+}
+
+EventLoop::Registration::operator bool() const noexcept {
+    return loop_ != nullptr && fd_ >= 0;
+}
+
+EventLoop::Registration EventLoop::registerFdScoped(int fd,
+                                                    EventLoopHandler* handler,
+                                                    uint32_t events) {
+    registerFd(fd, handler, events);
+    return Registration(this, fd);
+}
+
+void EventLoop::flushDeferredCloseFds() noexcept {
+    for (const int fd : deferred_close_fds_) {
+        close(fd);
+    }
+    deferred_close_fds_.clear();
 }
 
 }  // namespace sinnet

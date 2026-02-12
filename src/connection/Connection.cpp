@@ -103,13 +103,13 @@ void Connection::close() noexcept {
         return;
     }
 
-    if (is_registered_) {
+    if (registration_.has_value()) {
         try {
-            loop_.unregisterFd(fd_);
+            registration_->reset();
         } catch (...) {
             // close() is noexcept; swallow unregister failures during shutdown path.
         }
-        is_registered_ = false;
+        registration_.reset();
         registered_events_ = 0;
         fd_ = -1;
         resetSendState();
@@ -240,13 +240,12 @@ const ConnectionHandler& Connection::handler() const noexcept {
 }
 
 void Connection::registerIfNeeded() {
-    if (is_registered_ || !isOpen()) {
+    if (registration_.has_value() || !isOpen()) {
         return;
     }
 
     registered_events_ = EPOLLERR | EPOLLHUP;
-    loop_.registerFd(fd_, this, registered_events_);
-    is_registered_ = true;
+    registration_.emplace(loop_.registerFdScoped(fd_, this, registered_events_));
 }
 
 void Connection::resetSendState() noexcept {
@@ -255,7 +254,7 @@ void Connection::resetSendState() noexcept {
 }
 
 void Connection::updateRegistrationEvents() {
-    if (!is_registered_ || !isOpen()) {
+    if (!registration_.has_value() || !isOpen()) {
         return;
     }
 
@@ -328,13 +327,13 @@ void Connection::failConnect(int error_code) noexcept {
     state_ = State::Failed;
 
     if (fd_ >= 0) {
-        if (is_registered_) {
+        if (registration_.has_value()) {
             try {
-                loop_.unregisterFd(fd_);
+                registration_->reset();
             } catch (...) {
                 ::close(fd_);
             }
-            is_registered_ = false;
+            registration_.reset();
         } else {
             ::close(fd_);
         }

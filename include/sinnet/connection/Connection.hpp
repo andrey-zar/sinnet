@@ -1,10 +1,11 @@
 #pragma once
 
-#include "sinnet/eventloop/EventLoopHandler.hpp"
+#include "sinnet/eventloop/EventLoop.hpp"
 
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <optional>
 #include <span>
 #include <sys/socket.h>
 #include <sys/types.h>
@@ -13,10 +14,6 @@
 namespace sinnet::connection {
 
 class ConnectionHandler;
-}
-
-namespace sinnet {
-class EventLoop;
 }
 
 namespace sinnet::connection {
@@ -119,7 +116,7 @@ private:
     int socket_type_ = 0;
     int socket_protocol_ = 0;
     int fd_ = -1;
-    bool is_registered_ = false;
+    std::optional<sinnet::EventLoop::Registration> registration_;
     uint32_t registered_events_ = 0;
     State state_ = State::Idle;
 
