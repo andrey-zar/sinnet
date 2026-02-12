@@ -4,17 +4,13 @@
 
 #include <cerrno>
 #include <cstring>
-#include <netdb.h>
+#include <netinet/in.h>
 #include <netinet/ip.h>
 #include <netinet/tcp.h>
-#include <poll.h>
 #include <stdexcept>
-#include <string>
-#include <string_view>
 #include <sys/epoll.h>
 #include <sys/socket.h>
 #include <system_error>
-#include <memory>
 #include <unistd.h>
 
 namespace sinnet::connection {
@@ -68,45 +64,20 @@ void applyLowLatencySocketOptions(int fd, int socktype, int protocol) {
     setSocketOptionInt(fd, IPPROTO_IP, IP_TOS, IPTOS_LOWDELAY, "setsockopt(IP_TOS)", false);
 }
 
-void waitForConnectCompletion(int fd) {
-    struct pollfd pfd {};
-    pfd.fd = fd;
-    pfd.events = POLLOUT;
-
-    const int poll_result = ::poll(&pfd, 1, 2'000);
-    if (poll_result == 0) {
-        throw std::runtime_error("connect timeout");
-    }
-    if (poll_result < 0) {
-        throw std::system_error(errno, std::generic_category(), "poll");
-    }
-
-    int socket_error = 0;
-    socklen_t option_len = sizeof(socket_error);
-    if (::getsockopt(fd, SOL_SOCKET, SO_ERROR, &socket_error, &option_len) != 0) {
-        throw std::system_error(errno, std::generic_category(), "getsockopt");
-    }
-    if (socket_error != 0) {
-        throw std::system_error(socket_error, std::generic_category(), "connect");
-    }
-}
-
-using AddrInfoPtr = std::unique_ptr<addrinfo, decltype(&::freeaddrinfo)>;
-
 }  // namespace
 
+void ConnectionHandler::onConnected(Connection&) {}
+void ConnectionHandler::onConnectError(Connection&, int) {}
 void ConnectionHandler::onClosed(Connection&) {}
 
 Connection::Connection(sinnet::EventLoop& loop,
                        ConnectionHandler& handler,
-                       int domain,
                        int type,
                        int protocol)
     : loop_(loop),
       handler_(handler),
-      fd_(createNonBlockingSocket(domain, type, protocol)) {
-    applyLowLatencySocketOptions(fd_, type, protocol);
-}
+      socket_type_(type),
+      socket_protocol_(protocol) {}
 
 Connection::~Connection() {
     close();
@@ -116,8 +87,19 @@ bool Connection::isOpen() const noexcept {
     return fd_ >= 0;
 }
 
+bool Connection::isConnected() const noexcept {
+    return state_ == State::Connected;
+}
+
+Connection::State Connection::state() const noexcept {
+    return state_;
+}
+
 void Connection::close() noexcept {
     if (fd_ < 0) {
+        if (state_ == State::Connecting || state_ == State::Connected || state_ == State::Idle) {
+            state_ = State::Closed;
+        }
         return;
     }
 
@@ -131,15 +113,28 @@ void Connection::close() noexcept {
         registered_events_ = 0;
         fd_ = -1;
         resetSendState();
+        if (state_ != State::Failed) {
+            state_ = State::Closed;
+        }
         return;
     }
 
     ::close(fd_);
     fd_ = -1;
     resetSendState();
+    if (state_ != State::Failed) {
+        state_ = State::Closed;
+    }
 }
 
 void Connection::onEvent(uint32_t event_mask) {
+    if (state_ == State::Connecting) {
+        if ((event_mask & (EPOLLOUT | EPOLLERR | EPOLLHUP)) != 0U) {
+            handleConnectEvent();
+        }
+        return;
+    }
+
     if ((event_mask & (EPOLLERR | EPOLLHUP)) != 0U) {
         close();
         handler_.onClosed(*this);
@@ -157,50 +152,47 @@ void Connection::onEvent(uint32_t event_mask) {
     handleReadableEvent();
 }
 
-void Connection::connectToRemote(std::string_view host,
-                                 std::string_view port,
-                                 int family,
-                                 int socktype,
-                                 int protocol,
-                                 bool wait_for_nonblocking_connect) {
-    if (!isOpen()) {
-        throw std::logic_error("connection is not open");
+void Connection::connectToRemote(const Endpoint& endpoint) {
+    if (state_ == State::Connecting) {
+        throw std::logic_error("connection is already connecting");
+    }
+    if (state_ == State::Connected) {
+        throw std::logic_error("connection is already connected");
+    }
+    if (endpoint.address_length == 0) {
+        throw std::invalid_argument("endpoint address_length must be non-zero");
     }
 
-    struct addrinfo hints {};
-    hints.ai_family = family;
-    hints.ai_socktype = socktype;
-    hints.ai_protocol = protocol;
-
-    std::string host_str(host);
-    std::string port_str(port);
-
-    struct addrinfo* result_raw = nullptr;
-    const int gai_result = ::getaddrinfo(host_str.c_str(), port_str.c_str(), &hints, &result_raw);
-    if (gai_result != 0) {
-        throw std::runtime_error(std::string("getaddrinfo failed: ") + ::gai_strerror(gai_result));
-    }
-    AddrInfoPtr result(result_raw, ::freeaddrinfo);
-
-    bool connected = false;
-    for (addrinfo* current = result.get(); current != nullptr; current = current->ai_next) {
-        if (::connect(fd_, current->ai_addr, current->ai_addrlen) == 0) {
-            connected = true;
-            break;
-        }
-
-        if (errno == EINPROGRESS && wait_for_nonblocking_connect) {
-            waitForConnectCompletion(fd_);
-            connected = true;
-            break;
-        }
+    const int family = endpoint.address.ss_family;
+    if (family != AF_INET && family != AF_INET6) {
+        throw std::invalid_argument("endpoint family must be AF_INET or AF_INET6");
     }
 
-    if (!connected) {
-        throw std::runtime_error("unable to connect using provided host and port");
+    const socklen_t min_length =
+        static_cast<socklen_t>(family == AF_INET ? sizeof(sockaddr_in) : sizeof(sockaddr_in6));
+    if (endpoint.address_length < min_length ||
+        endpoint.address_length > static_cast<socklen_t>(sizeof(sockaddr_storage))) {
+        throw std::invalid_argument("endpoint address_length is invalid for address family");
     }
 
-    registerIfNeeded();
+    ensureSocketForFamily(family);
+
+    const int connect_result = ::connect(fd_,
+                                         reinterpret_cast<const sockaddr*>(&endpoint.address),
+                                         endpoint.address_length);
+    if (connect_result == 0) {
+        completeConnect();
+        return;
+    }
+
+    if (errno == EINPROGRESS) {
+        state_ = State::Connecting;
+        registerIfNeeded();
+        updateRegistrationEvents();
+        return;
+    }
+
+    failConnect(errno);
 }
 
 ssize_t Connection::enqueueSendData(std::span<const std::byte> data,
@@ -252,7 +244,7 @@ void Connection::registerIfNeeded() {
         return;
     }
 
-    registered_events_ = EPOLLIN | EPOLLERR | EPOLLHUP;
+    registered_events_ = EPOLLERR | EPOLLHUP;
     loop_.registerFd(fd_, this, registered_events_);
     is_registered_ = true;
 }
@@ -267,9 +259,14 @@ void Connection::updateRegistrationEvents() {
         return;
     }
 
-    uint32_t events = EPOLLIN | EPOLLERR | EPOLLHUP;
-    if (pending_send_bytes_ > 0) {
+    uint32_t events = EPOLLERR | EPOLLHUP;
+    if (state_ == State::Connecting) {
         events |= EPOLLOUT;
+    } else if (state_ == State::Connected) {
+        events |= EPOLLIN;
+        if (pending_send_bytes_ > 0) {
+            events |= EPOLLOUT;
+        }
     }
 
     if (events == registered_events_) {
@@ -278,6 +275,69 @@ void Connection::updateRegistrationEvents() {
 
     loop_.modifyFdEvents(fd_, events);
     registered_events_ = events;
+}
+
+void Connection::ensureSocketForFamily(int family) {
+    if (fd_ >= 0) {
+        return;
+    }
+
+    fd_ = createNonBlockingSocket(family, socket_type_, socket_protocol_);
+    applyLowLatencySocketOptions(fd_, socket_type_, socket_protocol_);
+    if (state_ != State::Connected) {
+        state_ = State::Idle;
+    }
+}
+
+void Connection::handleConnectEvent() {
+    if (!isOpen() || state_ != State::Connecting) {
+        return;
+    }
+
+    int socket_error = 0;
+    socklen_t option_len = sizeof(socket_error);
+    if (::getsockopt(fd_, SOL_SOCKET, SO_ERROR, &socket_error, &option_len) != 0) {
+        failConnect(errno);
+        return;
+    }
+
+    if (socket_error != 0) {
+        failConnect(socket_error);
+        return;
+    }
+
+    completeConnect();
+}
+
+void Connection::completeConnect() {
+    state_ = State::Connected;
+    registerIfNeeded();
+    updateRegistrationEvents();
+    handler_.onConnected(*this);
+    if (pending_send_bytes_ > 0) {
+        flushSendBuffer();
+    }
+}
+
+void Connection::failConnect(int error_code) {
+    state_ = State::Failed;
+
+    if (fd_ >= 0) {
+        if (is_registered_) {
+            try {
+                loop_.unregisterFd(fd_);
+            } catch (...) {
+                ::close(fd_);
+            }
+            is_registered_ = false;
+        } else {
+            ::close(fd_);
+        }
+        fd_ = -1;
+        registered_events_ = 0;
+    }
+    resetSendState();
+    handler_.onConnectError(*this, error_code);
 }
 
 }  // namespace sinnet::connection

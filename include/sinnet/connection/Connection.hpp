@@ -6,7 +6,7 @@
 #include <cstdint>
 #include <deque>
 #include <span>
-#include <string_view>
+#include <sys/socket.h>
 #include <sys/types.h>
 #include <vector>
 
@@ -34,16 +34,31 @@ namespace sinnet::connection {
 // - `handleReadableEvent()` for protocol-specific receive path.
 class Connection : public sinnet::EventLoopHandler {
 public:
+    struct Endpoint {
+        sockaddr_storage address {};
+        socklen_t address_length = 0;
+    };
+
+    enum class State : uint8_t {
+        Idle,
+        Connecting,
+        Connected,
+        Failed,
+        Closed,
+    };
+
     Connection(const Connection&) = delete;
     Connection& operator=(const Connection&) = delete;
     Connection(Connection&& other) = delete;
     Connection& operator=(Connection&& other) = delete;
     virtual ~Connection();
 
-    virtual void connect(std::string_view host, std::string_view port) = 0;
+    virtual void connect(const Endpoint& endpoint) = 0;
 
     // True when socket file descriptor is valid and owned by this object.
     bool isOpen() const noexcept;
+    bool isConnected() const noexcept;
+    State state() const noexcept;
 
     // Closes the socket and unregisters from EventLoop when needed.
     void close() noexcept;
@@ -52,20 +67,14 @@ public:
     void onEvent(uint32_t event_mask) override;
 
 protected:
-    // Creates a non-blocking socket and stores references to loop/handler.
+    // Stores references and socket parameters; socket is created on connect().
     Connection(sinnet::EventLoop& loop,
                ConnectionHandler& handler,
-               int domain,
                int type,
                int protocol);
 
-    // Shared connect helper used by protocol-specific derived connections.
-    void connectToRemote(std::string_view host,
-                         std::string_view port,
-                         int family,
-                         int socktype,
-                         int protocol,
-                         bool wait_for_nonblocking_connect);
+    // Shared async connect helper used by protocol-specific derived connections.
+    void connectToRemote(const Endpoint& endpoint);
     ssize_t enqueueSendData(std::span<const std::byte> data,
                             int flags,
                             const char* closed_error_message,
@@ -99,13 +108,20 @@ protected:
 private:
     void registerIfNeeded();
     void resetSendState() noexcept;
+    void ensureSocketForFamily(int family);
+    void handleConnectEvent();
+    void completeConnect();
+    void failConnect(int error_code);
 
     // Core ownership and registration state.
     sinnet::EventLoop& loop_;
     ConnectionHandler& handler_;
+    int socket_type_ = 0;
+    int socket_protocol_ = 0;
     int fd_ = -1;
     bool is_registered_ = false;
     uint32_t registered_events_ = 0;
+    State state_ = State::Idle;
 
 };
 

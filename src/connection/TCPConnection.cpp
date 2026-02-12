@@ -2,7 +2,6 @@
 
 #include <cerrno>
 #include <netinet/in.h>
-#include <string_view>
 #include <sys/socket.h>
 #include <sys/uio.h>
 #include <system_error>
@@ -10,10 +9,10 @@
 namespace sinnet::connection {
 
 TCPConnection::TCPConnection(sinnet::EventLoop& loop, ConnectionHandler& handler)
-    : Connection(loop, handler, AF_INET, SOCK_STREAM, IPPROTO_TCP) {}
+    : Connection(loop, handler, SOCK_STREAM, IPPROTO_TCP) {}
 
-void TCPConnection::connect(std::string_view host, std::string_view port) {
-    connectToRemote(host, port, AF_INET, SOCK_STREAM, IPPROTO_TCP, true);
+void TCPConnection::connect(const Endpoint& endpoint) {
+    connectToRemote(endpoint);
 }
 
 ssize_t TCPConnection::send(std::span<const std::byte> data, int flags) {

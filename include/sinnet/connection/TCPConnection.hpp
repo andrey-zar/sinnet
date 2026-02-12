@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <span>
-#include <string_view>
 
 namespace sinnet {
 class EventLoop;
@@ -18,8 +17,8 @@ class TCPConnection : public Connection {
 public:
     TCPConnection(sinnet::EventLoop& loop, ConnectionHandler& handler);
 
-    // Establishes non-blocking TCP connection.
-    void connect(std::string_view host, std::string_view port) override;
+    // Starts asynchronous TCP connection to a resolved endpoint.
+    void connect(const Endpoint& endpoint) override;
 
     // Enqueues outgoing stream bytes for async flush on EPOLLOUT.
     ssize_t send(std::span<const std::byte> data, int flags = 0);

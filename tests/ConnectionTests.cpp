@@ -4,6 +4,7 @@
 #include "sinnet/eventloop/EventLoop.hpp"
 
 #include <arpa/inet.h>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -85,8 +86,41 @@ int createUdpServerSocket(uint16_t* out_port) {
     return server_fd;
 }
 
-std::string portToString(uint16_t port) {
-    return std::to_string(static_cast<unsigned>(port));
+uint16_t reserveUnusedTcpPort() {
+    const int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0) {
+        throw std::runtime_error("socket failed");
+    }
+
+    sockaddr_in addr {};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    addr.sin_port = htons(0);
+    if (::bind(fd, reinterpret_cast<const sockaddr*>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        throw std::runtime_error("bind failed");
+    }
+
+    sockaddr_in bound_addr {};
+    socklen_t bound_len = sizeof(bound_addr);
+    if (::getsockname(fd, reinterpret_cast<sockaddr*>(&bound_addr), &bound_len) != 0) {
+        ::close(fd);
+        throw std::runtime_error("getsockname failed");
+    }
+
+    ::close(fd);
+    return ntohs(bound_addr.sin_port);
+}
+
+sinnet::connection::Connection::Endpoint makeIpv4Endpoint(uint16_t port) {
+    sinnet::connection::Connection::Endpoint endpoint;
+    sockaddr_in addr {};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(port);
+    addr.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    std::memcpy(&endpoint.address, &addr, sizeof(addr));
+    endpoint.address_length = static_cast<socklen_t>(sizeof(addr));
+    return endpoint;
 }
 
 class StopOnDataHandler : public sinnet::connection::ConnectionHandler {
@@ -161,6 +195,43 @@ private:
     size_t expected_bytes_ = 0;
 };
 
+class ConnectSignalHandler : public sinnet::connection::ConnectionHandler {
+public:
+    explicit ConnectSignalHandler(sinnet::EventLoop* loop,
+                                  std::mutex* mutex,
+                                  std::condition_variable* cv)
+        : loop_(loop), mutex_(mutex), cv_(cv) {}
+
+    void onConnected(sinnet::connection::Connection&) override {
+        connected_.store(true, std::memory_order_release);
+        cv_->notify_one();
+        loop_->stop();
+    }
+
+    void onConnectError(sinnet::connection::Connection&, int error_code) override {
+        connect_error_.store(error_code, std::memory_order_release);
+        cv_->notify_one();
+        loop_->stop();
+    }
+
+    void onData(sinnet::connection::Connection&, std::span<const std::byte>) override {}
+
+    bool connected() const noexcept {
+        return connected_.load(std::memory_order_acquire);
+    }
+
+    int connectError() const noexcept {
+        return connect_error_.load(std::memory_order_acquire);
+    }
+
+private:
+    sinnet::EventLoop* loop_ = nullptr;
+    std::mutex* mutex_ = nullptr;
+    std::condition_variable* cv_ = nullptr;
+    std::atomic<bool> connected_{false};
+    std::atomic<int> connect_error_{0};
+};
+
 TEST(ConnectionTests, TcpConnectionCanSendAndReceive) {
     sinnet::EventLoop loop;
     std::string received_payload;
@@ -189,7 +260,7 @@ TEST(ConnectionTests, TcpConnectionCanSendAndReceive) {
     });
 
     sinnet::connection::TCPConnection connection(loop, handler);
-    connection.connect("127.0.0.1", portToString(port));
+    connection.connect(makeIpv4Endpoint(port));
 
     const char request[] = "ping";
     ASSERT_EQ(connection.send(std::as_bytes(std::span(request, 4)), 0), 4);
@@ -254,7 +325,7 @@ TEST(ConnectionTests, UdpConnectionCanSendAndReceive) {
     });
 
     sinnet::connection::UDPConnection connection(loop, handler);
-    connection.connect("127.0.0.1", portToString(port));
+    connection.connect(makeIpv4Endpoint(port));
 
     const char request[] = "ping";
     ASSERT_EQ(connection.send(std::as_bytes(std::span(request, 4)), 0), 4);
@@ -304,7 +375,7 @@ TEST(ConnectionTests, ConnectionInvokesHandlerOnData) {
     });
 
     sinnet::connection::TCPConnection connection(loop, handler);
-    connection.connect("127.0.0.1", portToString(port));
+    connection.connect(makeIpv4Endpoint(port));
 
     std::exception_ptr loop_error;
     std::thread loop_thread([&]() {
@@ -373,7 +444,7 @@ TEST(ConnectionTests, UdpConnectionBatchesMultipleSmallMessages) {
     });
 
     sinnet::connection::UDPConnection connection(loop, handler);
-    connection.connect("127.0.0.1", portToString(port));
+    connection.connect(makeIpv4Endpoint(port));
 
     for (size_t i = 0; i < kMessageCount; ++i) {
         const auto payload_bytes = std::span(
@@ -402,6 +473,79 @@ TEST(ConnectionTests, UdpConnectionBatchesMultipleSmallMessages) {
 
     ASSERT_EQ(loop_error, nullptr);
     ASSERT_EQ(received_data.size(), expected_bytes);
+}
+
+TEST(ConnectionTests, ConnectSuccessInvokesOnConnected) {
+    sinnet::EventLoop loop;
+    std::mutex mutex;
+    std::condition_variable cv;
+    ConnectSignalHandler handler(&loop, &mutex, &cv);
+
+    uint16_t port = 0;
+    const int server_fd = createTcpServerSocket(&port);
+    std::thread server_thread([&]() {
+        const int client_fd = ::accept(server_fd, nullptr, nullptr);
+        ASSERT_GE(client_fd, 0);
+        ::close(client_fd);
+        ::close(server_fd);
+    });
+
+    sinnet::connection::TCPConnection connection(loop, handler);
+    connection.connect(makeIpv4Endpoint(port));
+
+    if (!handler.connected()) {
+        std::exception_ptr loop_error;
+        std::thread loop_thread([&]() {
+            try {
+                loop.run();
+            } catch (...) {
+                loop_error = std::current_exception();
+            }
+        });
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(1), [&]() { return handler.connected(); }));
+        }
+        loop_thread.join();
+        ASSERT_EQ(loop_error, nullptr);
+    }
+
+    server_thread.join();
+    EXPECT_TRUE(handler.connected());
+    EXPECT_EQ(handler.connectError(), 0);
+}
+
+TEST(ConnectionTests, ConnectFailureInvokesOnConnectError) {
+    sinnet::EventLoop loop;
+    std::mutex mutex;
+    std::condition_variable cv;
+    ConnectSignalHandler handler(&loop, &mutex, &cv);
+
+    const uint16_t unused_port = reserveUnusedTcpPort();
+    sinnet::connection::TCPConnection connection(loop, handler);
+    connection.connect(makeIpv4Endpoint(unused_port));
+
+    if (handler.connectError() == 0) {
+        std::exception_ptr loop_error;
+        std::thread loop_thread([&]() {
+            try {
+                loop.run();
+            } catch (...) {
+                loop_error = std::current_exception();
+            }
+        });
+        {
+            std::unique_lock<std::mutex> lock(mutex);
+            ASSERT_TRUE(cv.wait_for(lock, std::chrono::seconds(1), [&]() {
+                return handler.connectError() != 0;
+            }));
+        }
+        loop_thread.join();
+        ASSERT_EQ(loop_error, nullptr);
+    }
+
+    EXPECT_FALSE(handler.connected());
+    EXPECT_NE(handler.connectError(), 0);
 }
 
 }  // namespace

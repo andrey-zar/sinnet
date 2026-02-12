@@ -17,6 +17,12 @@ public:
     ConnectionHandler() = default;
     virtual ~ConnectionHandler() = default;
 
+    // Called when asynchronous connect completes successfully.
+    virtual void onConnected(Connection& connection);
+
+    // Called when asynchronous connect fails. Uses errno-compatible error code.
+    virtual void onConnectError(Connection& connection, int error_code);
+
     // Called when new payload bytes are available.
     virtual void onData(Connection& connection, std::span<const std::byte> data) = 0;
 

@@ -3,17 +3,16 @@
 #include <array>
 #include <cerrno>
 #include <netinet/in.h>
-#include <string_view>
 #include <sys/socket.h>
 #include <system_error>
 
 namespace sinnet::connection {
 
 UDPConnection::UDPConnection(sinnet::EventLoop& loop, ConnectionHandler& handler)
-    : Connection(loop, handler, AF_INET, SOCK_DGRAM, IPPROTO_UDP) {}
+    : Connection(loop, handler, SOCK_DGRAM, IPPROTO_UDP) {}
 
-void UDPConnection::connect(std::string_view host, std::string_view port) {
-    connectToRemote(host, port, AF_INET, SOCK_DGRAM, IPPROTO_UDP, false);
+void UDPConnection::connect(const Endpoint& endpoint) {
+    connectToRemote(endpoint);
 }
 
 ssize_t UDPConnection::send(std::span<const std::byte> data, int flags) {

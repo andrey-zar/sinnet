@@ -5,7 +5,6 @@
 
 #include <cstddef>
 #include <span>
-#include <string_view>
 
 namespace sinnet {
 class EventLoop;
@@ -18,8 +17,8 @@ class UDPConnection : public Connection {
 public:
     UDPConnection(sinnet::EventLoop& loop, ConnectionHandler& handler);
 
-    // Establishes connected UDP socket (peer address is fixed after connect).
-    void connect(std::string_view host, std::string_view port) override;
+    // Starts asynchronous UDP connect to a resolved endpoint.
+    void connect(const Endpoint& endpoint) override;
 
     // Enqueues one datagram for async flush on EPOLLOUT.
     ssize_t send(std::span<const std::byte> data, int flags = 0);

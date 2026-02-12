@@ -43,8 +43,8 @@ This builds:
 ./build/example
 ```
 
-The example performs a TCP `HEAD` request to `example.com` and prints the HTTP
-status line.
+The example resolves `example.com` with `getaddrinfo`, connects using the
+resolved endpoint, and prints the HTTP status line.
 
 ## Quick Usage
 
@@ -56,6 +56,15 @@ Create a handler derived from `sinnet::connection::ConnectionHandler`:
 class MyHandler : public sinnet::connection::ConnectionHandler {
 public:
     explicit MyHandler(sinnet::EventLoop& loop) : loop_(loop) {}
+
+    void onConnected(sinnet::connection::Connection&) override {
+        // Connect completed; now writes can be flushed.
+    }
+
+    void onConnectError(sinnet::connection::Connection&, int error_code) override {
+        // Connection failed (errno-compatible value).
+        loop_.stop();
+    }
 
     void onData(sinnet::connection::Connection&, std::span<const std::byte> data) override {
         // Process incoming raw payload bytes.
@@ -74,7 +83,8 @@ private:
 sinnet::EventLoop loop;
 MyHandler handler(loop);
 sinnet::connection::TCPConnection connection(loop, handler);
-connection.connect("127.0.0.1", "8080");
+sinnet::connection::Connection::Endpoint endpoint = /* result from your resolver */;
+connection.connect(endpoint);
 ```
 
 ### 3) Queue data and run loop
@@ -86,6 +96,14 @@ loop.run();
 
 `send(...)` enqueues data; actual socket writes are performed asynchronously on
 `EPOLLOUT`.
+
+## Connect Model
+
+- `connect(endpoint)` is asynchronous and non-blocking.
+- The library accepts one pre-resolved endpoint (`sockaddr_storage` + length).
+- Hostname resolution is intentionally delegated to the library user.
+- `ConnectionHandler::onConnected(...)` is called on successful connect.
+- `ConnectionHandler::onConnectError(...)` is called on connect failure.
 
 ## TCP vs UDP Behavior
 
