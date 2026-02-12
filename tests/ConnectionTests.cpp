@@ -138,7 +138,7 @@ public:
           ready_(ready),
           expected_payload_(std::move(expected_payload)) {}
 
-    void onData(sinnet::connection::Connection&, std::span<const std::byte> data) override {
+    void onData(sinnet::connection::Connection&, std::span<const std::byte> data) noexcept override {
         {
             std::lock_guard<std::mutex> lock(*mutex_);
             storage_->append(reinterpret_cast<const char*>(data.data()), data.size());
@@ -174,7 +174,7 @@ public:
           ready_(ready),
           expected_bytes_(expected_bytes) {}
 
-    void onData(sinnet::connection::Connection&, std::span<const std::byte> data) override {
+    void onData(sinnet::connection::Connection&, std::span<const std::byte> data) noexcept override {
         {
             std::lock_guard<std::mutex> lock(*mutex_);
             storage_->append(reinterpret_cast<const char*>(data.data()), data.size());
@@ -202,19 +202,19 @@ public:
                                   std::condition_variable* cv)
         : loop_(loop), mutex_(mutex), cv_(cv) {}
 
-    void onConnected(sinnet::connection::Connection&) override {
+    void onConnected(sinnet::connection::Connection&) noexcept override {
         connected_.store(true, std::memory_order_release);
         cv_->notify_one();
         loop_->stop();
     }
 
-    void onConnectError(sinnet::connection::Connection&, int error_code) override {
+    void onConnectError(sinnet::connection::Connection&, int error_code) noexcept override {
         connect_error_.store(error_code, std::memory_order_release);
         cv_->notify_one();
         loop_->stop();
     }
 
-    void onData(sinnet::connection::Connection&, std::span<const std::byte>) override {}
+    void onData(sinnet::connection::Connection&, std::span<const std::byte>) noexcept override {}
 
     bool connected() const noexcept {
         return connected_.load(std::memory_order_acquire);

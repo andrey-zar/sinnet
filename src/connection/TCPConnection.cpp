@@ -4,7 +4,6 @@
 #include <netinet/in.h>
 #include <sys/socket.h>
 #include <sys/uio.h>
-#include <system_error>
 
 namespace sinnet::connection {
 
@@ -19,7 +18,7 @@ ssize_t TCPConnection::send(std::span<const std::byte> data, int flags) {
     return enqueueSendData(data, flags, "tcp connection is not open", true);
 }
 
-void TCPConnection::handleReadableEvent() {
+void TCPConnection::handleReadableEvent() noexcept {
     if (!isOpen()) {
         return;
     }
@@ -43,11 +42,13 @@ void TCPConnection::handleReadableEvent() {
             return;
         }
 
-        throw std::system_error(errno, std::generic_category(), "recv");
+        close();
+        handler().onClosed(*this);
+        return;
     }
 }
 
-void TCPConnection::flushSendBuffer() {
+void TCPConnection::flushSendBuffer() noexcept {
     while (!send_queue_.empty()) {
         struct iovec iovecs[kMaxIovecBatch];
         int iov_count = 0;
@@ -98,13 +99,20 @@ void TCPConnection::flushSendBuffer() {
             break;
         }
 
-        throw std::system_error(errno, std::generic_category(), "sendmsg");
+        close();
+        handler().onClosed(*this);
+        return;
     }
 
     if (send_queue_.empty()) {
         pending_send_bytes_ = 0;
     }
-    updateRegistrationEvents();
+    try {
+        updateRegistrationEvents();
+    } catch (...) {
+        close();
+        handler().onClosed(*this);
+    }
 }
 
 }  // namespace sinnet::connection

@@ -9,7 +9,7 @@ public:
     EventLoopHandler() = default;
     virtual ~EventLoopHandler() = default;
 
-    virtual void onEvent(uint32_t event_mask) = 0;
+    virtual void onEvent(uint32_t event_mask) noexcept = 0;
 
 protected:
     static constexpr uint32_t kEpollIn = 0x001;

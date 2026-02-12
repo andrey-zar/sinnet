@@ -48,11 +48,12 @@ class HttpHeadHandler : public sinnet::connection::ConnectionHandler {
 public:
     explicit HttpHeadHandler(sinnet::EventLoop& event_loop) : event_loop_(event_loop) {}
 
-    void onConnected(sinnet::connection::Connection&) override {
+    void onConnected(sinnet::connection::Connection&) noexcept override {
         std::cout << "Connected, waiting for response..." << '\n';
     }
 
-    void onData(sinnet::connection::Connection& connection, std::span<const std::byte> data) override {
+    void onData(sinnet::connection::Connection& connection,
+                std::span<const std::byte> data) noexcept override {
         response_.append(reinterpret_cast<const char*>(data.data()), data.size());
         printStatusLineIfReady(connection);
     }

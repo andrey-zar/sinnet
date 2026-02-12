@@ -19,7 +19,7 @@ namespace {
 
 class NoopHandler : public sinnet::EventLoopHandler {
 public:
-    void onEvent(uint32_t) override {}
+    void onEvent(uint32_t) noexcept override {}
 };
 
 class RecordingHandler : public sinnet::EventLoopHandler {
@@ -27,7 +27,7 @@ public:
     explicit RecordingHandler(std::function<void(uint32_t)> callback)
         : callback_(std::move(callback)) {}
 
-    void onEvent(uint32_t event_mask) override {
+    void onEvent(uint32_t event_mask) noexcept override {
         callback_(event_mask);
     }
 

@@ -25,10 +25,10 @@ public:
 
 protected:
     // Reads stream bytes until EAGAIN and dispatches payload chunks to handler.
-    void handleReadableEvent() override;
+    void handleReadableEvent() noexcept override;
 
     // Drains queued stream bytes in batched sendmsg+iovec syscalls.
-    void flushSendBuffer() override;
+    void flushSendBuffer() noexcept override;
 
 private:
     static constexpr size_t kMaxIovecBatch = 64;

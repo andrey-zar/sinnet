@@ -292,7 +292,7 @@ void EventLoop::pinToCpu(int cpu_id) {
 
 EventLoop::WakeupHandler::WakeupHandler(int wakeup_fd) : wakeup_fd_(wakeup_fd) {}
 
-void EventLoop::WakeupHandler::onEvent(uint32_t) {
+void EventLoop::WakeupHandler::onEvent(uint32_t) noexcept {
     drainEventFd(wakeup_fd_);
 }
 

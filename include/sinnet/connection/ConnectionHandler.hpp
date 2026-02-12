@@ -18,16 +18,16 @@ public:
     virtual ~ConnectionHandler() = default;
 
     // Called when asynchronous connect completes successfully.
-    virtual void onConnected(Connection& connection);
+    virtual void onConnected(Connection& connection) noexcept;
 
     // Called when asynchronous connect fails. Uses errno-compatible error code.
-    virtual void onConnectError(Connection& connection, int error_code);
+    virtual void onConnectError(Connection& connection, int error_code) noexcept;
 
     // Called when new payload bytes are available.
-    virtual void onData(Connection& connection, std::span<const std::byte> data) = 0;
+    virtual void onData(Connection& connection, std::span<const std::byte> data) noexcept = 0;
 
     // Called when the connection transitions to closed state.
-    virtual void onClosed(Connection& connection);
+    virtual void onClosed(Connection& connection) noexcept;
 };
 
 }  // namespace sinnet::connection

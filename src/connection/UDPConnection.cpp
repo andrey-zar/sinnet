@@ -4,7 +4,6 @@
 #include <cerrno>
 #include <netinet/in.h>
 #include <sys/socket.h>
-#include <system_error>
 
 namespace sinnet::connection {
 
@@ -19,7 +18,7 @@ ssize_t UDPConnection::send(std::span<const std::byte> data, int flags) {
     return enqueueSendData(data, flags, "udp connection is not open", false);
 }
 
-void UDPConnection::flushSendBuffer() {
+void UDPConnection::flushSendBuffer() noexcept {
     while (!send_queue_.empty()) {
         std::array<mmsghdr, kMaxBatchMessages> messages {};
         std::array<iovec, kMaxBatchMessages> iovecs {};
@@ -66,16 +65,23 @@ void UDPConnection::flushSendBuffer() {
         if (sent_count < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
             break;
         }
-        throw std::system_error(errno, std::generic_category(), "sendmmsg");
+        close();
+        handler().onClosed(*this);
+        return;
     }
 
     if (send_queue_.empty()) {
         pending_send_bytes_ = 0;
     }
-    updateRegistrationEvents();
+    try {
+        updateRegistrationEvents();
+    } catch (...) {
+        close();
+        handler().onClosed(*this);
+    }
 }
 
-void UDPConnection::handleReadableEvent() {
+void UDPConnection::handleReadableEvent() noexcept {
     std::array<mmsghdr, kMaxBatchMessages> messages {};
     std::array<iovec, kMaxBatchMessages> iovecs {};
     std::array<std::array<char, kReceiveBufferBytes>, kMaxBatchMessages> buffers {};
@@ -111,7 +117,9 @@ void UDPConnection::handleReadableEvent() {
         if (errno == EAGAIN || errno == EWOULDBLOCK) {
             return;
         }
-        throw std::system_error(errno, std::generic_category(), "recvmmsg");
+        close();
+        handler().onClosed(*this);
+        return;
     }
 }
 

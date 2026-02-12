@@ -64,7 +64,7 @@ public:
     void close() noexcept;
 
     // EventLoop callback entry point. Dispatches to write/read handlers.
-    void onEvent(uint32_t event_mask) override;
+    void onEvent(uint32_t event_mask) noexcept override;
 
 protected:
     // Stores references and socket parameters; socket is created on connect().
@@ -85,8 +85,8 @@ protected:
     const ConnectionHandler& handler() const noexcept;
 
     // Overridable I/O hooks for protocol-specific behavior.
-    virtual void handleReadableEvent() = 0;
-    virtual void flushSendBuffer() = 0;
+    virtual void handleReadableEvent() noexcept = 0;
+    virtual void flushSendBuffer() noexcept = 0;
 
     // Generic pending-send chunk used by connection implementations.
     struct PendingChunk {
@@ -109,9 +109,9 @@ private:
     void registerIfNeeded();
     void resetSendState() noexcept;
     void ensureSocketForFamily(int family);
-    void handleConnectEvent();
-    void completeConnect();
-    void failConnect(int error_code);
+    void handleConnectEvent() noexcept;
+    void completeConnect() noexcept;
+    void failConnect(int error_code) noexcept;
 
     // Core ownership and registration state.
     sinnet::EventLoop& loop_;

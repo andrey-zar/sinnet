@@ -80,7 +80,7 @@ private:
     class WakeupHandler : public EventLoopHandler {
     public:
         explicit WakeupHandler(int wakeup_fd);
-        void onEvent(uint32_t event_mask) override;
+        void onEvent(uint32_t event_mask) noexcept override;
 
     private:
         int wakeup_fd_ = -1;

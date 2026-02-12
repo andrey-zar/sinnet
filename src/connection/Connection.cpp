@@ -66,9 +66,9 @@ void applyLowLatencySocketOptions(int fd, int socktype, int protocol) {
 
 }  // namespace
 
-void ConnectionHandler::onConnected(Connection&) {}
-void ConnectionHandler::onConnectError(Connection&, int) {}
-void ConnectionHandler::onClosed(Connection&) {}
+void ConnectionHandler::onConnected(Connection&) noexcept {}
+void ConnectionHandler::onConnectError(Connection&, int) noexcept {}
+void ConnectionHandler::onClosed(Connection&) noexcept {}
 
 Connection::Connection(sinnet::EventLoop& loop,
                        ConnectionHandler& handler,
@@ -127,7 +127,7 @@ void Connection::close() noexcept {
     }
 }
 
-void Connection::onEvent(uint32_t event_mask) {
+void Connection::onEvent(uint32_t event_mask) noexcept {
     if (state_ == State::Connecting) {
         if ((event_mask & (EPOLLOUT | EPOLLERR | EPOLLHUP)) != 0U) {
             handleConnectEvent();
@@ -289,7 +289,7 @@ void Connection::ensureSocketForFamily(int family) {
     }
 }
 
-void Connection::handleConnectEvent() {
+void Connection::handleConnectEvent() noexcept {
     if (!isOpen() || state_ != State::Connecting) {
         return;
     }
@@ -309,17 +309,22 @@ void Connection::handleConnectEvent() {
     completeConnect();
 }
 
-void Connection::completeConnect() {
+void Connection::completeConnect() noexcept {
     state_ = State::Connected;
-    registerIfNeeded();
-    updateRegistrationEvents();
+    try {
+        registerIfNeeded();
+        updateRegistrationEvents();
+    } catch (...) {
+        failConnect(EIO);
+        return;
+    }
     handler_.onConnected(*this);
     if (pending_send_bytes_ > 0) {
         flushSendBuffer();
     }
 }
 
-void Connection::failConnect(int error_code) {
+void Connection::failConnect(int error_code) noexcept {
     state_ = State::Failed;
 
     if (fd_ >= 0) {

@@ -57,16 +57,16 @@ class MyHandler : public sinnet::connection::ConnectionHandler {
 public:
     explicit MyHandler(sinnet::EventLoop& loop) : loop_(loop) {}
 
-    void onConnected(sinnet::connection::Connection&) override {
+    void onConnected(sinnet::connection::Connection&) noexcept override {
         // Connect completed; now writes can be flushed.
     }
 
-    void onConnectError(sinnet::connection::Connection&, int error_code) override {
+    void onConnectError(sinnet::connection::Connection&, int error_code) noexcept override {
         // Connection failed (errno-compatible value).
         loop_.stop();
     }
 
-    void onData(sinnet::connection::Connection&, std::span<const std::byte> data) override {
+    void onData(sinnet::connection::Connection&, std::span<const std::byte> data) noexcept override {
         // Process incoming raw payload bytes.
         // When your stop condition is met:
         loop_.stop();
@@ -102,6 +102,7 @@ loop.run();
 - `connect(endpoint)` is asynchronous and non-blocking.
 - The library accepts one pre-resolved endpoint (`sockaddr_storage` + length).
 - Hostname resolution is intentionally delegated to the library user.
+- Handler callbacks are `noexcept`; users should handle errors inside callbacks.
 - `ConnectionHandler::onConnected(...)` is called on successful connect.
 - `ConnectionHandler::onConnectError(...)` is called on connect failure.
 

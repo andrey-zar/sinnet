@@ -25,10 +25,10 @@ public:
 
 protected:
     // Drains queued datagrams in batched sendmmsg syscalls.
-    void flushSendBuffer() override;
+    void flushSendBuffer() noexcept override;
 
     // Reads datagrams in batches via recvmmsg and dispatches to handler.
-    void handleReadableEvent() override;
+    void handleReadableEvent() noexcept override;
 
 private:
     static constexpr size_t kMaxBatchMessages = 32;
