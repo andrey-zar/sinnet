@@ -9,6 +9,12 @@
 /cmake_install.cmake
 /compile_commands.json
 /Makefile
+/CTestTestfile.cmake
+/DartConfiguration.tcl
+/Testing/
+
+# Tool caches
+/.cache/
 
 # IDE/editor files
 /.vscode/
