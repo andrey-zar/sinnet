@@ -26,13 +26,13 @@ void UDPConnection::flushSendBuffer() noexcept {
         size_t batch_size = 0;
         for (size_t i = 0; i < send_queue_.size() && batch_size < kMaxBatchMessages; ++i) {
             PendingChunk& chunk = send_queue_[i];
-            const size_t remaining = chunk.data.size() - chunk.offset;
+            const size_t remaining = chunk.size - chunk.offset;
             if (remaining == 0) {
                 continue;
             }
 
             iovecs[batch_size].iov_base =
-                const_cast<char*>(chunk.data.data() + chunk.offset);
+                const_cast<char*>(chunk.data() + chunk.offset);
             iovecs[batch_size].iov_len = remaining;
 
             messages[batch_size].msg_hdr.msg_iov = &iovecs[batch_size];
@@ -49,13 +49,14 @@ void UDPConnection::flushSendBuffer() noexcept {
         if (sent_count > 0) {
             for (int i = 0; i < sent_count && !send_queue_.empty(); ++i) {
                 PendingChunk& front = send_queue_.front();
-                const size_t remaining = front.data.size() - front.offset;
+                const size_t remaining = front.size - front.offset;
                 const size_t sent_bytes = static_cast<size_t>(messages[static_cast<size_t>(i)].msg_len);
                 const size_t consumed = (sent_bytes < remaining) ? sent_bytes : remaining;
                 pending_send_bytes_ -= consumed;
                 front.offset += consumed;
 
-                if (front.offset >= front.data.size()) {
+                if (front.offset >= front.size) {
+                    recycleChunkStorage(front);
                     send_queue_.pop_front();
                 }
             }

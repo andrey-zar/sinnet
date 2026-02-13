@@ -70,6 +70,14 @@ void ConnectionHandler::onConnected(Connection&) noexcept {}
 void ConnectionHandler::onConnectError(Connection&, int) noexcept {}
 void ConnectionHandler::onClosed(Connection&) noexcept {}
 
+const char* Connection::PendingChunk::data() const noexcept {
+    return heap_data ? heap_data.get() : inline_data.data();
+}
+
+char* Connection::PendingChunk::data() noexcept {
+    return heap_data ? heap_data.get() : inline_data.data();
+}
+
 Connection::Connection(sinnet::EventLoop& loop,
                        ConnectionHandler& handler,
                        int type,
@@ -77,7 +85,9 @@ Connection::Connection(sinnet::EventLoop& loop,
     : loop_(loop),
       handler_(handler),
       socket_type_(type),
-      socket_protocol_(protocol) {}
+      socket_protocol_(protocol) {
+    free_heap_buffers_.reserve(kMaxReusableHeapBuffers);
+}
 
 Connection::~Connection() {
     close();
@@ -212,14 +222,20 @@ ssize_t Connection::enqueueSendData(std::span<const std::byte> data,
         throw std::length_error("send buffer hard cap exceeded");
     }
 
+    (void)reserve_large_first_chunk;
     PendingChunk chunk;
-    if (reserve_large_first_chunk && send_queue_.empty()) {
-        chunk.data.reserve((data.size() > kInitialSendBufferBytes) ? data.size() : kInitialSendBufferBytes);
-    } else {
-        chunk.data.reserve(data.size());
+    chunk.size = data.size();
+    chunk.offset = 0;
+    if (chunk.size > PendingChunk::kInlineBytes) {
+        size_t capacity = 0;
+        chunk.heap_data = takeReusableHeapBuffer(chunk.size, capacity);
+        if (!chunk.heap_data) {
+            capacity = chunk.size;
+            chunk.heap_data = std::make_unique<char[]>(capacity);
+        }
+        chunk.heap_capacity = capacity;
     }
-    chunk.data.resize(data.size());
-    std::memcpy(chunk.data.data(), data.data(), data.size());
+    std::memcpy(chunk.data(), data.data(), chunk.size);
     send_queue_.push_back(std::move(chunk));
     pending_send_bytes_ += data.size();
 
@@ -249,8 +265,42 @@ void Connection::registerIfNeeded() {
 }
 
 void Connection::resetSendState() noexcept {
+    for (auto& chunk : send_queue_) {
+        recycleChunkStorage(chunk);
+    }
     send_queue_.clear();
     pending_send_bytes_ = 0;
+}
+
+std::unique_ptr<char[]> Connection::takeReusableHeapBuffer(size_t min_capacity,
+                                                           size_t& out_capacity) noexcept {
+    for (size_t i = 0; i < free_heap_buffers_.size(); ++i) {
+        ReusableHeapBuffer& candidate = free_heap_buffers_[i];
+        if (candidate.capacity < min_capacity) {
+            continue;
+        }
+        out_capacity = candidate.capacity;
+        std::unique_ptr<char[]> buffer = std::move(candidate.data);
+        free_heap_buffers_[i] = std::move(free_heap_buffers_.back());
+        free_heap_buffers_.pop_back();
+        return buffer;
+    }
+    out_capacity = 0;
+    return nullptr;
+}
+
+void Connection::recycleChunkStorage(PendingChunk& chunk) noexcept {
+    if (chunk.heap_data) {
+        if (free_heap_buffers_.size() < kMaxReusableHeapBuffers) {
+            free_heap_buffers_.push_back(
+                ReusableHeapBuffer{std::move(chunk.heap_data), chunk.heap_capacity});
+        } else {
+            chunk.heap_data.reset();
+        }
+    }
+    chunk.heap_capacity = 0;
+    chunk.size = 0;
+    chunk.offset = 0;
 }
 
 void Connection::updateRegistrationEvents() {

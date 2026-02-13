@@ -2,9 +2,11 @@
 
 #include "sinnet/eventloop/EventLoop.hpp"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <deque>
+#include <memory>
 #include <optional>
 #include <span>
 #include <sys/socket.h>
@@ -87,24 +89,37 @@ protected:
 
     // Generic pending-send chunk used by connection implementations.
     struct PendingChunk {
-        std::vector<char> data;
+        static constexpr size_t kInlineBytes = 256;
+        std::array<char, kInlineBytes> inline_data {};
+        std::unique_ptr<char[]> heap_data;
+        size_t heap_capacity = 0;
+        size_t size = 0;
         size_t offset = 0;
+
+        const char* data() const noexcept;
+        char* data() noexcept;
     };
 
     // Recomputes epoll interest set according to connection state/queues.
     void updateRegistrationEvents();
+    void recycleChunkStorage(PendingChunk& chunk) noexcept;
 
     // Shared queue/state for protocol send pipelines.
     std::deque<PendingChunk> send_queue_;
     size_t pending_send_bytes_ = 0;
 
     // Buffer policy defaults used by derived send implementations.
-    static constexpr size_t kInitialSendBufferBytes = 512 * 1024;
     static constexpr size_t kHardSendBufferBytes = 8 * 1024 * 1024;
 
 private:
+    struct ReusableHeapBuffer {
+        std::unique_ptr<char[]> data;
+        size_t capacity = 0;
+    };
+
     void registerIfNeeded();
     void resetSendState() noexcept;
+    std::unique_ptr<char[]> takeReusableHeapBuffer(size_t min_capacity, size_t& out_capacity) noexcept;
     void ensureSocketForFamily(int family);
     void handleConnectEvent() noexcept;
     void completeConnect() noexcept;
@@ -119,6 +134,9 @@ private:
     std::optional<sinnet::EventLoop::Registration> registration_;
     uint32_t registered_events_ = 0;
     State state_ = State::Idle;
+    std::vector<ReusableHeapBuffer> free_heap_buffers_;
+
+    static constexpr size_t kMaxReusableHeapBuffers = 64;
 
 };
 

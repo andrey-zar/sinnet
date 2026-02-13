@@ -57,13 +57,13 @@ void TCPConnection::flushSendBuffer() noexcept {
                 break;
             }
 
-            const size_t remaining = chunk.data.size() - chunk.offset;
+            const size_t remaining = chunk.size - chunk.offset;
             if (remaining == 0) {
                 continue;
             }
 
             iovecs[iov_count].iov_base =
-                const_cast<char*>(chunk.data.data() + chunk.offset);
+                const_cast<char*>(chunk.data() + chunk.offset);
             iovecs[iov_count].iov_len = remaining;
             ++iov_count;
         }
@@ -82,7 +82,7 @@ void TCPConnection::flushSendBuffer() noexcept {
 
             while (consumed > 0 && !send_queue_.empty()) {
                 PendingChunk& front = send_queue_.front();
-                const size_t remaining = front.data.size() - front.offset;
+                const size_t remaining = front.size - front.offset;
                 if (consumed < remaining) {
                     front.offset += consumed;
                     consumed = 0;
@@ -90,6 +90,7 @@ void TCPConnection::flushSendBuffer() noexcept {
                 }
 
                 consumed -= remaining;
+                recycleChunkStorage(front);
                 send_queue_.pop_front();
             }
             continue;
