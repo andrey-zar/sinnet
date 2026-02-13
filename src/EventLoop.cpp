@@ -20,6 +20,7 @@ namespace {
 constexpr uint32_t kDefaultEpollEvents = EPOLLIN | EPOLLOUT;
 constexpr int kEpollMaxEvents = 64;
 constexpr uint32_t kDefaultInitialSlotsCapacity = 1024;
+constexpr uint32_t kSlotsGrowthStep = 1024;
 constexpr uint32_t kFdTableHardCap = 8192;
 constexpr uint32_t kWakeupFdEvents = EPOLLIN | EPOLLERR | EPOLLHUP;
 
@@ -74,7 +75,23 @@ uint32_t EventLoop::allocSlot() {
         slots_[slot_id].next_free = kInvalidSlot;
         return slot_id;
     }
-    throw std::runtime_error("slot pool exhausted; increase initial_slots_capacity");
+
+    const uint32_t old_size = static_cast<uint32_t>(slots_.size());
+    const uint32_t new_size = old_size + kSlotsGrowthStep;
+    if (new_size <= old_size) {
+        throw std::runtime_error("slot pool size overflow");
+    }
+
+    slots_.resize(new_size);
+    for (uint32_t i = old_size; i < new_size; ++i) {
+        slots_[i].next_free = (i + 1 < new_size) ? (i + 1) : kInvalidSlot;
+    }
+    free_head_ = old_size;
+
+    uint32_t slot_id = free_head_;
+    free_head_ = slots_[slot_id].next_free;
+    slots_[slot_id].next_free = kInvalidSlot;
+    return slot_id;
 }
 
 void EventLoop::freeSlot(uint32_t slot_id) {

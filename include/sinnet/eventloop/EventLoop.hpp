@@ -13,13 +13,13 @@
 // carry old gen; slot.generation != gen => stale, ignore. Same slot_id, different
 // gen => slot was reused.
 //
-// LOW-LATENCY: single-threaded, no allocs in run() (preallocate/reserve),
+// LOW-LATENCY: single-threaded, no allocs in run() after warmup (preallocate/reserve),
 // contiguous slots, stack-allocated epoll_event buffer, and eventfd wakeup for
 // immediate stop() without timeout polling.
 //
 // PSEUDOCODE:
 //   RegisterFD(fd, handler):
-//     slot_id = pop_free()
+//     slot_id = free_head ? pop_free() : grow_slots()
 //     slot.ptr=handler, slot.fd=fd
 //     token = (slot.generation << 32) | slot_id
 //     epoll_ctl(ADD, fd, {events, data.u64=token})

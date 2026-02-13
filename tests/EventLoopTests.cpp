@@ -341,4 +341,33 @@ TEST(EventLoopTests, UnregisterDuringDispatchDefersCloseUntilBatchEnd) {
     close(fds[1]);
 }
 
+TEST(EventLoopTests, SlotPoolGrowsWhenInitialCapacityIsExhausted) {
+    sinnet::EventLoop loop;
+    NoopHandler handler;
+
+    std::vector<int> read_fds;
+    std::vector<int> write_fds;
+    std::vector<sinnet::EventLoop::Registration> registrations;
+    read_fds.reserve(1030);
+    write_fds.reserve(1030);
+    registrations.reserve(1030);
+
+    for (int i = 0; i < 1030; ++i) {
+        int fds[2];
+        ASSERT_EQ(pipe(fds), 0);
+        read_fds.push_back(fds[0]);
+        write_fds.push_back(fds[1]);
+        ASSERT_NO_THROW(registrations.push_back(loop.registerFdScoped(fds[0], &handler, EPOLLIN)));
+    }
+
+    EXPECT_EQ(registrations.size(), static_cast<size_t>(1030));
+
+    for (auto& registration : registrations) {
+        registration.reset();
+    }
+    for (int fd : write_fds) {
+        close(fd);
+    }
+}
+
 }  // namespace
