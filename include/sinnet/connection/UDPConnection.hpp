@@ -3,6 +3,7 @@
 #include "sinnet/connection/Connection.hpp"
 #include "sinnet/connection/ConnectionHandler.hpp"
 
+#include <array>
 #include <cstddef>
 #include <span>
 
@@ -33,6 +34,10 @@ protected:
 private:
     static constexpr size_t kMaxBatchMessages = 32;
     static constexpr size_t kReceiveBufferBytes = 2048;
+
+    std::array<mmsghdr, kMaxBatchMessages> recv_messages_ {};
+    std::array<iovec, kMaxBatchMessages> recv_iovecs_ {};
+    std::array<std::array<char, kReceiveBufferBytes>, kMaxBatchMessages> recv_buffers_ {};
 };
 
 }  // namespace sinnet::connection

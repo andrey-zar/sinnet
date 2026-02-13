@@ -83,30 +83,30 @@ void UDPConnection::flushSendBuffer() noexcept {
 }
 
 void UDPConnection::handleReadableEvent() noexcept {
-    std::array<mmsghdr, kMaxBatchMessages> messages {};
-    std::array<iovec, kMaxBatchMessages> iovecs {};
-    std::array<std::array<char, kReceiveBufferBytes>, kMaxBatchMessages> buffers {};
-
     for (;;) {
         for (size_t i = 0; i < kMaxBatchMessages; ++i) {
-            iovecs[i].iov_base = buffers[i].data();
-            iovecs[i].iov_len = buffers[i].size();
-            messages[i].msg_hdr.msg_iov = &iovecs[i];
-            messages[i].msg_hdr.msg_iovlen = 1;
-            messages[i].msg_len = 0;
+            recv_iovecs_[i].iov_base = recv_buffers_[i].data();
+            recv_iovecs_[i].iov_len = recv_buffers_[i].size();
+            recv_messages_[i].msg_hdr.msg_iov = &recv_iovecs_[i];
+            recv_messages_[i].msg_hdr.msg_iovlen = 1;
+            recv_messages_[i].msg_len = 0;
         }
 
         const int received =
-            ::recvmmsg(socketFd(), messages.data(), static_cast<unsigned int>(kMaxBatchMessages), MSG_DONTWAIT, nullptr);
+            ::recvmmsg(socketFd(),
+                       recv_messages_.data(),
+                       static_cast<unsigned int>(kMaxBatchMessages),
+                       MSG_DONTWAIT,
+                       nullptr);
 
         if (received > 0) {
             for (int i = 0; i < received; ++i) {
-                const size_t len = static_cast<size_t>(messages[static_cast<size_t>(i)].msg_len);
+                const size_t len = static_cast<size_t>(recv_messages_[static_cast<size_t>(i)].msg_len);
                 if (len == 0) {
                     continue;
                 }
                 const auto* data_ptr =
-                    reinterpret_cast<const std::byte*>(buffers[static_cast<size_t>(i)].data());
+                    reinterpret_cast<const std::byte*>(recv_buffers_[static_cast<size_t>(i)].data());
                 handler().onData(*this, std::span<const std::byte>(data_ptr, len));
             }
             continue;
