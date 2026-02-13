@@ -141,7 +141,10 @@ EventLoop::~EventLoop() {
                 continue;
             }
             epoll_ctl(epoll_fd_, EPOLL_CTL_DEL, static_cast<int>(fd), nullptr);
-            close(static_cast<int>(fd));
+        }
+        if (wakeup_fd_ >= 0) {
+            close(wakeup_fd_);
+            wakeup_fd_ = -1;
         }
         close(epoll_fd_);
         epoll_fd_ = -1;

@@ -27,6 +27,7 @@ The project currently provides:
 - scoped fd registration and deferred close
   - public registration is `registerFdScoped(...)` (RAII token)
   - fd close requested during dispatch is deferred until batch end
+  - `EventLoop` destructor detaches registered user fds; only internal wakeup fd is closed
 
 ## Build
 
