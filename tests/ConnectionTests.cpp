@@ -4,6 +4,8 @@
 #include "sinnet/eventloop/EventLoop.hpp"
 
 #include <arpa/inet.h>
+#include <algorithm>
+#include <array>
 #include <atomic>
 #include <cerrno>
 #include <chrono>
@@ -230,6 +232,37 @@ private:
     std::condition_variable* cv_ = nullptr;
     std::atomic<bool> connected_{false};
     std::atomic<int> connect_error_{0};
+};
+
+class NoopConnectionHandler : public sinnet::connection::ConnectionHandler {
+public:
+    void onData(sinnet::connection::Connection&, std::span<const std::byte>) noexcept override {}
+};
+
+class InspectableTCPConnection : public sinnet::connection::TCPConnection {
+public:
+    using sinnet::connection::TCPConnection::TCPConnection;
+
+    size_t reusableHeapBufferCount() const noexcept {
+        return debugReusableHeapBufferCount();
+    }
+
+    size_t reusableHeapBufferTakeHits() const noexcept {
+        return debugReusableHeapBufferTakeHits();
+    }
+};
+
+class InspectableUDPConnection : public sinnet::connection::UDPConnection {
+public:
+    using sinnet::connection::UDPConnection::UDPConnection;
+
+    const void* recvMessagesPtr() const noexcept {
+        return debugRecvMessagesPtr();
+    }
+
+    const void* recvBuffersPtr() const noexcept {
+        return debugRecvBuffersPtr();
+    }
 };
 
 TEST(ConnectionTests, TcpConnectionCanSendAndReceive) {
@@ -546,6 +579,97 @@ TEST(ConnectionTests, ConnectFailureInvokesOnConnectError) {
 
     EXPECT_FALSE(handler.connected());
     EXPECT_NE(handler.connectError(), 0);
+}
+
+TEST(ConnectionTests, LargeSendBuffersAreReusedAcrossFlushes) {
+    sinnet::EventLoop loop;
+    NoopConnectionHandler handler;
+
+    uint16_t port = 0;
+    const int server_fd = createTcpServerSocket(&port);
+    std::atomic<size_t> received_total{0};
+
+    std::thread server_thread([&]() {
+        const int client_fd = ::accept(server_fd, nullptr, nullptr);
+        ASSERT_GE(client_fd, 0);
+        std::array<char, 4096> buffer {};
+        for (;;) {
+            const ssize_t n = ::recv(client_fd, buffer.data(), buffer.size(), 0);
+            if (n > 0) {
+                received_total.fetch_add(static_cast<size_t>(n), std::memory_order_relaxed);
+                continue;
+            }
+            break;
+        }
+        ::close(client_fd);
+        ::close(server_fd);
+    });
+
+    InspectableTCPConnection connection(loop, handler);
+    connection.connect(makeIpv4Endpoint(port));
+
+    static constexpr size_t kPayloadSize = 4096;
+    std::array<std::byte, kPayloadSize> payload {};
+    std::fill(payload.begin(), payload.end(), std::byte{'A'});
+
+    std::exception_ptr loop_error;
+    std::thread loop_thread([&]() {
+        try {
+            loop.run();
+        } catch (...) {
+            loop_error = std::current_exception();
+        }
+    });
+
+    ASSERT_EQ(connection.send(payload, 0), static_cast<ssize_t>(kPayloadSize));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(1);
+    while (connection.reusableHeapBufferCount() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(connection.reusableHeapBufferCount(), 0U);
+    ASSERT_EQ(connection.send(payload, 0), static_cast<ssize_t>(kPayloadSize));
+
+    while (connection.reusableHeapBufferTakeHits() == 0 &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_GT(connection.reusableHeapBufferTakeHits(), 0U);
+    while (received_total.load(std::memory_order_relaxed) < (kPayloadSize * 2) &&
+           std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+
+    connection.close();
+    loop.stop();
+    loop_thread.join();
+    server_thread.join();
+
+    ASSERT_EQ(loop_error, nullptr);
+    EXPECT_GT(connection.reusableHeapBufferTakeHits(), 0U);
+    EXPECT_GE(received_total.load(std::memory_order_relaxed), kPayloadSize * 2);
+}
+
+TEST(ConnectionTests, UdpReceiveScratchBuffersAreStable) {
+    sinnet::EventLoop loop;
+    NoopConnectionHandler handler;
+    InspectableUDPConnection connection(loop, handler);
+
+    const void* messages_ptr_before = connection.recvMessagesPtr();
+    const void* buffers_ptr_before = connection.recvBuffersPtr();
+
+    uint16_t port = 0;
+    const int server_fd = createUdpServerSocket(&port);
+    connection.connect(makeIpv4Endpoint(port));
+
+    const void* messages_ptr_after = connection.recvMessagesPtr();
+    const void* buffers_ptr_after = connection.recvBuffersPtr();
+
+    EXPECT_EQ(messages_ptr_before, messages_ptr_after);
+    EXPECT_EQ(buffers_ptr_before, buffers_ptr_after);
+
+    connection.close();
+    ::close(server_fd);
 }
 
 }  // namespace

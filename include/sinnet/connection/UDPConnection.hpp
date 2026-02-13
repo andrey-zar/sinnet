@@ -30,6 +30,8 @@ protected:
 
     // Reads datagrams in batches via recvmmsg and dispatches to handler.
     void handleReadableEvent() noexcept override;
+    const void* debugRecvMessagesPtr() const noexcept;
+    const void* debugRecvBuffersPtr() const noexcept;
 
 private:
     static constexpr size_t kMaxBatchMessages = 32;

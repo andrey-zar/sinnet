@@ -124,4 +124,12 @@ void UDPConnection::handleReadableEvent() noexcept {
     }
 }
 
+const void* UDPConnection::debugRecvMessagesPtr() const noexcept {
+    return recv_messages_.data();
+}
+
+const void* UDPConnection::debugRecvBuffersPtr() const noexcept {
+    return recv_buffers_.data();
+}
+
 }  // namespace sinnet::connection

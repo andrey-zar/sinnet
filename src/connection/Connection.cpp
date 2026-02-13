@@ -283,6 +283,7 @@ std::unique_ptr<char[]> Connection::takeReusableHeapBuffer(size_t min_capacity,
         std::unique_ptr<char[]> buffer = std::move(candidate.data);
         free_heap_buffers_[i] = std::move(free_heap_buffers_.back());
         free_heap_buffers_.pop_back();
+        ++reusable_heap_take_hits_;
         return buffer;
     }
     out_capacity = 0;
@@ -301,6 +302,14 @@ void Connection::recycleChunkStorage(PendingChunk& chunk) noexcept {
     chunk.heap_capacity = 0;
     chunk.size = 0;
     chunk.offset = 0;
+}
+
+size_t Connection::debugReusableHeapBufferCount() const noexcept {
+    return free_heap_buffers_.size();
+}
+
+size_t Connection::debugReusableHeapBufferTakeHits() const noexcept {
+    return reusable_heap_take_hits_;
 }
 
 void Connection::updateRegistrationEvents() {

@@ -103,6 +103,8 @@ protected:
     // Recomputes epoll interest set according to connection state/queues.
     void updateRegistrationEvents();
     void recycleChunkStorage(PendingChunk& chunk) noexcept;
+    size_t debugReusableHeapBufferCount() const noexcept;
+    size_t debugReusableHeapBufferTakeHits() const noexcept;
 
     // Shared queue/state for protocol send pipelines.
     std::deque<PendingChunk> send_queue_;
@@ -135,6 +137,7 @@ private:
     uint32_t registered_events_ = 0;
     State state_ = State::Idle;
     std::vector<ReusableHeapBuffer> free_heap_buffers_;
+    size_t reusable_heap_take_hits_ = 0;
 
     static constexpr size_t kMaxReusableHeapBuffers = 64;
 
